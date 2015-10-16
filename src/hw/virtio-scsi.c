@@ -32,6 +32,22 @@ struct virtio_lun_s {
     u16 lun;
 };
 
+int
+virtio_scsi_get_device_parameters(struct drive_s *drive_gf
+                                  , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (! CONFIG_VIRTIO_SCSI)
+        return DISK_RET_EPARAM;
+
+    struct virtio_lun_s *vlun =
+        container_of(drive_gf, struct virtio_lun_s, drive);
+    *iobase = 0xffffffff;
+    *target = vlun->target;
+    *lun = vlun->lun;
+
+    return DISK_RET_SUCCESS;
+}
+
 static int
 virtio_scsi_cmd(u16 ioaddr, struct vring_virtqueue *vq, struct disk_op_s *op,
                 void *cdbcmd, u16 target, u16 lun, u16 blocksize)

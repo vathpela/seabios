@@ -50,6 +50,21 @@ struct lsi_lun_s {
     u8 lun;
 };
 
+int
+lsi_scsi_get_device_parameters(struct drive_s *drive_gf
+                               , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (!CONFIG_LSI_SCSI)
+        return DISK_RET_EPARAM;
+
+    struct lsi_lun_s *llun_gf =
+        container_of(drive_gf, struct lsi_lun_s, drive);
+    SET_LOWFLAT(*iobase, GET_GLOBALFLAT(llun_gf->iobase));
+    SET_LOWFLAT(*target, GET_GLOBALFLAT(llun_gf->target));
+    SET_LOWFLAT(*lun, GET_GLOBALFLAT(llun_gf->lun));
+    return DISK_RET_SUCCESS;
+}
+
 static int
 lsi_scsi_cmd(struct lsi_lun_s *llun_gf, struct disk_op_s *op,
              void *cdbcmd, u16 target, u16 lun, u16 blocksize)

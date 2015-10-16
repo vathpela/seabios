@@ -65,6 +65,21 @@ struct esp_lun_s {
     u8 lun;
 };
 
+int
+esp_scsi_get_device_parameters(struct drive_s *drive_gf
+                               , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (!CONFIG_ESP_SCSI)
+        return DISK_RET_EPARAM;
+
+    struct esp_lun_s *elun_gf =
+        container_of(drive_gf, struct esp_lun_s, drive);
+    SET_LOWFLAT(*iobase, GET_GLOBALFLAT(elun_gf->iobase));
+    SET_LOWFLAT(*target, GET_GLOBALFLAT(elun_gf->target));
+    SET_LOWFLAT(*lun, GET_GLOBALFLAT(elun_gf->lun));
+    return DISK_RET_SUCCESS;
+}
+
 static void
 esp_scsi_dma(u32 iobase, u32 buf, u32 len, int read)
 {

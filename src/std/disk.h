@@ -48,7 +48,80 @@ struct dpte_s {
     u16 reserved;
     u8  revision;
     u8  checksum;
-};
+} PACKED;
+
+struct int13dpt_t13dp_s {
+    union {
+        struct {
+            u8 device;
+            u8 reserved0;
+            u16 reserved1;
+            u32 reserved2;
+            u64 reserved3;
+        } ata PACKED;
+        struct {
+            u8 device;
+            u8 lun;
+            u8 reserved0;
+            u8 reserved1;
+            u32 reserved2;
+            u64 reserved3;
+        } atapi PACKED;
+        struct {
+            u16 id;
+            u32 lun;
+            u16 reserved0;
+            u64 reserved1;
+        } scsi PACKED;
+        struct {
+            u64 serial;
+            u64 reserved0;
+        } usb PACKED;
+        struct {
+            u64 eui64;
+            u64 reserved0;
+        } ieee1394 PACKED;
+        struct {
+            u64 wwid;
+            u64 lun;
+        } fibre PACKED;
+        struct {
+            u64 identity_tag;
+            u64 reserved0;
+        } i2o PACKED;
+        struct {
+            u32 array_number;
+            u32 reserved0;
+            u64 reserved1;
+        } raid PACKED;
+        struct {
+            u8 port;
+            u8 pmp; // reserved in v3
+            u16 reserved0;
+            u32 reserved1;
+            u64 reserved2;
+        } sata PACKED;
+        struct {
+            u64 address;
+            u64 lun;
+        } sas PACKED; // only in v4
+        struct {
+            u64 reserved0;
+            u64 reserved1;
+            u8  reserved2;
+            u8  checksum;
+        } generic PACKED;
+    } PACKED;
+} PACKED;
+
+union device_path_u {
+    struct {
+        u64 device_path;
+        u8  reserved3;
+        u8  checksum;
+    } phoenix PACKED;
+    struct int13dpt_t13dp_s t13;
+} PACKED;
 
 // Disk Physical Table definition
 struct int13dpt_s {
@@ -67,18 +140,7 @@ struct int13dpt_s {
     u8  host_bus[4];
     u8  iface_type[8];
     u64 iface_path;
-    union {
-        struct {
-            u64 device_path;
-            u8  reserved3;
-            u8  checksum;
-        } phoenix;
-        struct {
-            u64 device_path[2];
-            u8  reserved3;
-            u8  checksum;
-        } t13;
-    };
+    union device_path_u device_path;
 } PACKED;
 
 // Floppy info
