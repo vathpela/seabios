@@ -43,5 +43,7 @@ struct virtio_scsi_resp_cmd {
 struct disk_op_s;
 int virtio_scsi_process_op(struct disk_op_s *op);
 void virtio_scsi_setup(void);
+int virtio_scsi_get_device_parameters(struct drive_s *drive_gf
+                                      , u32 *iobase, u16 *target, u32 *lun);
 
 #endif /* _VIRTIO_SCSI_H */

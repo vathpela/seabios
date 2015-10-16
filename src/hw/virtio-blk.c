@@ -28,6 +28,20 @@ struct virtiodrive_s {
     struct vp_device vp;
 };
 
+int
+virtio_blk_get_device_parameters(struct drive_s *drive_gf
+				 , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (! CONFIG_VIRTIO_BLK)
+        return DISK_RET_EPARAM;
+
+    *iobase = 0xffffffff;
+    *target = 0xffff;
+    *lun = 0xffffffff;
+
+    return DISK_RET_SUCCESS;
+}
+
 static int
 virtio_blk_op(struct disk_op_s *op, int write)
 {

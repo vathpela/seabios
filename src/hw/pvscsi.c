@@ -135,6 +135,22 @@ struct pvscsi_lun_s {
     struct pvscsi_ring_dsc_s *ring_dsc;
 };
 
+int
+pvscsi_get_device_parameters(struct drive_s *drive_gf
+                             , void **iobase, u16 *target, u32 *lun)
+{
+    if (!CONFIG_PVSCSI)
+        return DISK_RET_EPARAM;
+
+    struct pvscsi_lun_s *plun =
+        container_of(drive_gf, struct pvscsi_lun_s, drive);
+    *iobase = plun->iobase;
+    *target = plun->target;
+    *lun = plun->lun;
+
+    return DISK_RET_SUCCESS;
+}
+
 static void
 pvscsi_write_cmd_desc(void *iobase, u32 cmd, const void *desc, size_t len)
 {

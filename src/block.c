@@ -293,17 +293,26 @@ map_floppy_drive(struct drive_s *drive)
 #define EDD_BUS_MASK   0x0f
 #define EDD_ATA        0x10
 #define EDD_SCSI       0x20
+#define EDD_SATA       0x40
 #define EDD_IFACE_MASK 0xf0
 
 // Fill in EDD info
-static int
+int VISIBLE32FLAT
 fill_generic_edd(struct segoff_s edd, struct drive_s *drive_gf
-                 , u32 dpte_so, u8 bus_iface, u32 iface_path, u32 device_path)
+                 , struct dpte_s *dpte, struct int13dpt_s *dpt)
 {
+    ASSERT32FLAT();
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
     u16 seg = edd.seg;
     struct int13dpt_s *param_far = (void*)(edd.offset+0);
     u16 size = GET_FARVAR(seg, param_far->size);
-    u16 t13 = size == 74;
+    u16 t13 = size >= 74;
+    u32 dpte_so = dpte ? SEGOFF(GET_SEG(SS), (u32)dpte).segoff : 0;
+    u8 sum;
+    dprintf(1, "%s: edd.seg: 0x%04x\n", __func__, seg);
+    dprintf(1, "%s: size: %d\n", __func__, size);
+    dprintf(1, "%s: SEG_BIOS: 0x%04x global_seg: 0x%04x\n", __func__,
+	    SEG_BIOS, get_global_seg());
 
     // Buffer is too small
     if (size < 26)
@@ -350,14 +359,24 @@ fill_generic_edd(struct segoff_s edd, struct drive_s *drive_gf
     SET_FARVAR(seg, param_far->size, 30);
     SET_FARVAR(seg, param_far->dpte.segoff, dpte_so);
 
-    if (size < 66 || !bus_iface)
+    if (size < (t13 ? 74 : 66) || !bus_iface) {
+        SET_LOW(dpte->revision, 0x21);
+        sum = checksum_far(SEG_LOW, dpte, 15);
+        SET_LOW(dpte->checksum, -sum);
+
         return DISK_RET_SUCCESS;
+    }
 
     // EDD 3.x
+    SET_FARVAR(seg, param_far->size, t13 ? 74 : 66);
     SET_FARVAR(seg, param_far->key, 0xbedd);
     SET_FARVAR(seg, param_far->dpi_length, t13 ? 44 : 36);
     SET_FARVAR(seg, param_far->reserved1, 0);
     SET_FARVAR(seg, param_far->reserved2, 0);
+
+    SET_LOW(dpte->revision, 0x30);
+    sum = checksum_far(SEG_LOW, dpte, 15);
+    SET_LOW(dpte->checksum, -sum);
 
     const char *host_bus = "ISA ";
     if ((bus_iface & EDD_BUS_MASK) == EDD_PCI) {
@@ -366,25 +385,46 @@ fill_generic_edd(struct segoff_s edd, struct drive_s *drive_gf
             // Phoenix v3 spec (pre t13) did not define the PCI channel field
             iface_path &= 0x00ffffff;
     }
+
+    const char *iface_type = "        ";
+    if ((bus_iface & EDD_IFACE_MASK) == EDD_ATA) {
+        iface_type = "ATA     ";
+    } else if ((bus_iface & EDD_IFACE_MASK) == EDD_SCSI) {
+        iface_type = "SCSI    ";
+    }
+    if (t13) {
+        if ((bus_iface & EDD_IFACE_MASK) == EDD_SATA)
+            iface_type = "SATA    ";
+    }
+    for (int i=0; i < strlen(host_bus); i++)
+        SET_FARVAR(seg, param_far->host_bus[i], host_bus[i]);
+    for (int i=0; i < strlen(iface_type); i++)
+        SET_FARVAR(seg, param_far->iface_type[i], iface_type[i]);
+#if 0
     memcpy_far(seg, param_far->host_bus, SEG_BIOS, host_bus
                , sizeof(param_far->host_bus));
-    SET_FARVAR(seg, param_far->iface_path, iface_path);
-
-    const char *iface_type = "ATA     ";
-    if ((bus_iface & EDD_IFACE_MASK) == EDD_SCSI)
-        iface_type = "SCSI    ";
+    dprintf(1, "%s:%d\n", __func__, __LINE__);
     memcpy_far(seg, param_far->iface_type, SEG_BIOS, iface_type
                , sizeof(param_far->iface_type));
+#endif
+    SET_FARVAR(seg, param_far->iface_path, iface_path);
     if (t13) {
-        SET_FARVAR(seg, param_far->t13.device_path[0], device_path);
-        SET_FARVAR(seg, param_far->t13.device_path[1], 0);
+        SET_FARVAR(seg, param_far->device_path.t13.generic.reserved0
+                   , GET_LOW(dp.t13.generic.reserved0));
+        SET_FARVAR(seg, param_far->device_path.t13.generic.reserved1
+                   , GET_LOW(dp.t13.generic.reserved1));
 
-        SET_FARVAR(seg, param_far->t13.checksum
+	dprintf(1, "%s:%d: csum is 0x%02x\n", __func__, __LINE__,
+		(u8)(-checksum_far(seg, (void*)param_far+30, 43)));
+        SET_FARVAR(seg, param_far->device_path.t13.generic.checksum
                    , -checksum_far(seg, (void*)param_far+30, 43));
     } else {
-        SET_FARVAR(seg, param_far->phoenix.device_path, device_path);
+        SET_FARVAR(seg, param_far->device_path.phoenix.device_path
+                   , GET_LOW(dp.phoenix.device_path));
 
-        SET_FARVAR(seg, param_far->phoenix.checksum
+	dprintf(1, "%s:%d: csum is 0x%02x\n", __func__, __LINE__,
+		(u8)(-checksum_far(seg, (void*)param_far+30, 35)));
+        SET_FARVAR(seg, param_far->device_path.phoenix.checksum
                    , -checksum_far(seg, (void*)param_far+30, 35));
     }
 
@@ -399,16 +439,73 @@ edd_pci_path(u16 bdf, u8 channel)
             | (pci_bdf_to_fn(bdf) << 16) | ((u32)channel << 24));
 }
 
-struct dpte_s DefaultDPTE VARLOW;
+int VISIBLE32FLAT
+fill_ahci_edd(struct segoff_s edd, struct drive_s *drive_gf)
+{
+    ASSERT32FLAT();
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    dprintf(1, "%s: edd.seg: 0x%04x\n", __func__, edd.seg);
+    if (!CONFIG_AHCI)
+        return DISK_RET_EPARAM;
+
+    struct ahci_port_s *port_gf = container_of(
+        drive_gf, struct ahci_port_s, drive);
+    struct ahci_ctrl_s *ctrl_gf = GET_GLOBALFLAT(port_gf->ctrl);
+    u32 bdf = GET_GLOBALFLAT(ctrl_gf->pci_bdf);
+    u32 bustype = EDD_PCI | EDD_SATA;
+    u32 ifpath = ifpath = edd_pci_path(bdf, 0xff);
+    u16 options = 0;
+    struct dpte_s dpte;
+    struct int13dpt_s dpt;
+
+    SET_LOW(dp.t13.generic.reserved0, 0);
+    SET_LOW(dp.t13.generic.reserved1, 0);
+    SET_LOW(dp.t13.sata.port, GET_GLOBALFLAT(port_gf->pnr));
+    SET_LOW(dp.t13.sata.pmp, 0);
+
+    if (GET_GLOBALFLAT(port_gf->atapi)) {
+        // ATAPI
+        options |= 1<<5; // removable device
+        options |= 1<<6; // atapi device
+    }
+
+    u8 translation = GET_GLOBALFLAT(drive_gf->translation);
+    if (translation != TRANSLATION_NONE) {
+        options |= 1<<3; // CHS translation
+        if (translation == TRANSLATION_LBA)
+            options |= 1<<9;
+        if (translation == TRANSLATION_RECHS)
+            options |= 3<<9;
+    }
+
+    options |= 1<<4; // lba translation
+    options |= 1<<7; // 32-bit transfers
+
+    // Fill in dpte
+    SET_LOW(dpte.iobase1, GET_GLOBALFLAT(ctrl_gf->iobase));
+    SET_LOW(dpte.iobase2, 0);
+    SET_LOW(dpte.prefix, 0);
+    SET_LOW(dpte.unused, 0);
+    SET_LOW(dpte.irq, GET_GLOBALFLAT(ctrl_gf->irq));
+    SET_LOW(dpte.blkcount, 1);
+    SET_LOW(dpte.dma, 1);
+    SET_LOW(dpte.pio, 0);
+    SET_LOW(dpte.options, options);
+    SET_LOW(dpte.reserved, 0);
+
+    return fill_generic_edd(edd, drive_gf, &dpte, &dpt);
+}
 
 // EDD info for ATA and ATAPI drives
-static int
+int VISIBLE32FLAT
 fill_ata_edd(struct segoff_s edd, struct drive_s *drive_gf)
 {
+    ASSERT32FLAT();
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    dprintf(1, "%s: edd.seg: 0x%04x\n", __func__, edd.seg);
     if (!CONFIG_ATA)
         return DISK_RET_EPARAM;
 
-    // Fill in dpte
     struct atadrive_s *adrive_gf = container_of(
         drive_gf, struct atadrive_s, drive);
     struct ata_channel_s *chan_gf = GET_GLOBALFLAT(adrive_gf->chan_gf);
@@ -418,70 +515,225 @@ fill_ata_edd(struct segoff_s edd, struct drive_s *drive_gf)
     u16 iobase1 = GET_GLOBALFLAT(chan_gf->iobase1);
     int bdf = GET_GLOBALFLAT(chan_gf->pci_bdf);
     u8 channel = GET_GLOBALFLAT(chan_gf->chanid);
-
+    u32 bustype = EDD_ISA | EDD_ATA;
+    u32 ifpath = 0;
     u16 options = 0;
-    if (GET_GLOBALFLAT(drive_gf->type) == DTYPE_ATA) {
-        u8 translation = GET_GLOBALFLAT(drive_gf->translation);
-        if (translation != TRANSLATION_NONE) {
-            options |= 1<<3; // CHS translation
-            if (translation == TRANSLATION_LBA)
-                options |= 1<<9;
-            if (translation == TRANSLATION_RECHS)
-                options |= 3<<9;
-        }
-    } else {
+    struct dpte_s dpte;
+    struct int13dpt_s dpt;
+
+    bdf = GET_GLOBALFLAT(drive_gf->cntl_id);
+
+    SET_LOW(dp.t13.generic.reserved0, 0);
+    SET_LOW(dp.t13.generic.reserved1, 0);
+    SET_LOW(dp.t13.ata.device, channel);
+
+    if (GET_GLOBALFLAT(drive_gf->type) == DTYPE_ATA_ATAPI) {
         // ATAPI
         options |= 1<<5; // removable device
         options |= 1<<6; // atapi device
     }
+
+    u8 translation = GET_GLOBALFLAT(drive_gf->translation);
+    if (translation != TRANSLATION_NONE) {
+        options |= 1<<3; // CHS translation
+        if (translation == TRANSLATION_LBA)
+            options |= 1<<9;
+        if (translation == TRANSLATION_RECHS)
+            options |= 3<<9;
+    }
+
+    if (bdf != -1) {
+        bustype &= ~EDD_ISA;
+        bustype |= EDD_PCI;
+
+        ifpath = edd_pci_path(bdf, slave);
+    } else {
+        ifpath = iobase1;
+    }
+
     options |= 1<<4; // lba translation
     if (CONFIG_ATA_PIO32)
-        options |= 1<<7;
+        options |= 1<<7; // 32-bit transfers
 
-    SET_LOW(DefaultDPTE.iobase1, iobase1);
-    SET_LOW(DefaultDPTE.iobase2, iobase2 + ATA_CB_DC);
-    SET_LOW(DefaultDPTE.prefix, ((slave ? ATA_CB_DH_DEV1 : ATA_CB_DH_DEV0)
+    // Fill in dpte
+    SET_LOW(dpte.iobase1, iobase1);
+    SET_LOW(dpte.iobase2, iobase2 + ATA_CB_DC);
+    SET_LOW(dpte.prefix, ((slave ? ATA_CB_DH_DEV1 : ATA_CB_DH_DEV0)
                                  | ATA_CB_DH_LBA));
-    SET_LOW(DefaultDPTE.unused, 0xcb);
-    SET_LOW(DefaultDPTE.irq, irq);
-    SET_LOW(DefaultDPTE.blkcount, 1);
-    SET_LOW(DefaultDPTE.dma, 0);
-    SET_LOW(DefaultDPTE.pio, 0);
-    SET_LOW(DefaultDPTE.options, options);
-    SET_LOW(DefaultDPTE.reserved, 0);
-    SET_LOW(DefaultDPTE.revision, 0x11);
+    SET_LOW(dpte.unused, 0xcb);
+    SET_LOW(dpte.irq, irq);
+    SET_LOW(dpte.blkcount, 1);
+    SET_LOW(dpte.dma, 0);
+    SET_LOW(dpte.pio, 0);
+    SET_LOW(dpte.options, options);
+    SET_LOW(dpte.reserved, 0);
 
-    u8 sum = checksum_far(SEG_LOW, &DefaultDPTE, 15);
-    SET_LOW(DefaultDPTE.checksum, -sum);
+    return fill_generic_edd(edd, drive_gf, &dpte, &dpt);
+}
 
-    u32 bustype = EDD_ISA, ifpath = iobase1;
-    if (bdf >= 0) {
-        bustype = EDD_PCI;
-        ifpath = edd_pci_path(bdf, channel);
+int VISIBLE32FLAT
+fill_scsi_edd(struct segoff_s edd, struct drive_s *drive_gf
+              ,u32 iobase , u16 target, u32 lun)
+{
+    ASSERT32FLAT();
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    dprintf(1, "%s: edd.seg: 0x%04x\n", __func__, edd.seg);
+    u32 bustype = EDD_PCI | EDD_SCSI;
+    u32 ifpath = edd_pci_path(GET_GLOBALFLAT(drive_gf->cntl_id), 0xff);
+    u16 options = 0;
+    u8 translation = GET_GLOBALFLAT(drive_gf->translation);
+    struct dpte_s dpte;
+    struct int13dpt_s dpt;
+
+    if (translation != TRANSLATION_NONE) {
+        options |= 1<<3; // CHS translation
+        if (translation == TRANSLATION_LBA)
+            options |= 1<<9;
+        if (translation == TRANSLATION_RECHS)
+            options |= 3<<9;
     }
-    return fill_generic_edd(
-        edd, drive_gf, SEGOFF(SEG_LOW, (u32)&DefaultDPTE).segoff
-        , bustype | EDD_ATA, ifpath, slave);
+
+    options |= 1<<4; // lba translation
+    options |= 1<<7; // 32-bit transfer mode
+
+    SET_LOW(dp.t13.generic.reserved0, 0);
+    SET_LOW(dp.t13.generic.reserved1, 0);
+    SET_LOW(dp.t13.scsi.id, target);
+    SET_LOW(dp.t13.scsi.lun, lun);
+
+    // Fill in dpte
+    SET_LOW(dpte.iobase1, iobase);
+    SET_LOW(dpte.iobase2, 0);
+    SET_LOW(dpte.prefix, 0);
+    SET_LOW(dpte.unused, 0);
+    SET_LOW(dpte.irq, 0);
+    SET_LOW(dpte.blkcount, 1);
+    SET_LOW(dpte.dma, 0);
+    SET_LOW(dpte.pio, 0);
+    SET_LOW(dpte.options, options);
+    SET_LOW(dpte.reserved, 0);
+
+    return fill_generic_edd(edd, drive_gf, &dpte, &dpt);
+}
+
+int VISIBLE32FLAT
+fill_edd_both(struct segoff_s edd, struct drive_s *drive_gf)
+{
+    ASSERT32FLAT();
+    int ret;
+    u32 iobase;
+    u16 target;
+    u32 lun;
+    struct int13dpt_s dpt;
+
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    dprintf(1, "%s: edd.seg: 0x%04x\n", __func__, edd.seg);
+    switch (GET_GLOBALFLAT(drive_gf->type)) {
+    case DTYPE_ATA_ATAPI:
+        return fill_ata_edd(edd, drive_gf);
+    case DTYPE_LSI_SCSI:
+        ret = lsi_scsi_get_device_parameters(drive_gf, &iobase, &target, &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        return fill_scsi_edd(edd, drive_gf, iobase, target, lun);
+    case DTYPE_ESP_SCSI:
+        ret = esp_scsi_get_device_parameters(drive_gf, &iobase, &target, &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        return fill_scsi_edd(edd, drive_gf, iobase, target, lun);
+    case DTYPE_MEGASAS:
+        ret = megasas_get_device_parameters(drive_gf, &iobase, &target, &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        return fill_scsi_edd(edd, drive_gf, iobase, target, lun);
+    case DTYPE_AHCI:
+    case DTYPE_AHCI_ATAPI:
+    case DTYPE_VIRTIO_BLK:
+    case DTYPE_VIRTIO_SCSI:
+    case DTYPE_PVSCSI:
+        if (!MODESEGMENT)
+            return DISK_RET_EPARAM;
+        // In 16bit mode and driver not found - try in 32bit mode
+        extern void _cfunc32flat_fill_edd_32(void);
+        return call32_params(_cfunc32flat_fill_edd_32
+                             , (u32)MAKE_FLATPTR(GET_SEG(SS), &edd)
+                             , (u32)drive_gf
+                             , 0, DISK_RET_EPARAM);
+    default:
+        return DISK_RET_EPARAM;
+    }
+}
+
+int VISIBLE32FLAT
+fill_edd_32(struct segoff_s *edd, struct drive_s *drive_gf)
+{
+    ASSERT32FLAT();
+    int ret;
+    u32 iobase = 0;
+    void *iobasep = NULL;
+    u16 target = 0;
+    u32 lun = 0;
+
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    switch (drive_gf->type) {
+    case DTYPE_AHCI:
+    case DTYPE_AHCI_ATAPI:
+        return fill_ahci_edd(*edd, drive_gf);
+    case DTYPE_VIRTIO_BLK:
+        ret = virtio_blk_get_device_parameters(drive_gf, &iobase, &target
+                                               , &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        return fill_scsi_edd(*edd, drive_gf, iobase
+                             , target, lun);
+    case DTYPE_VIRTIO_SCSI:
+        ret = virtio_scsi_get_device_parameters(drive_gf, &iobase, &target
+                                                , &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        return fill_scsi_edd(*GET_FARVAR(GET_SEG(SS), edd), drive_gf, iobase
+                             , target, lun);
+    case DTYPE_PVSCSI:
+        ret = pvscsi_get_device_parameters(drive_gf, &iobasep, &target, &lun);
+        if (ret != DISK_RET_SUCCESS)
+            return ret;
+        iobase = (u32)iobasep;
+        return fill_scsi_edd(*GET_FARVAR(GET_SEG(SS), edd), drive_gf, iobase
+                             , target, lun);
+    default:
+        return fill_edd_both(*GET_FARVAR(GET_SEG(SS), edd), drive_gf);
+    }
+}
+
+static int
+fill_edd_16(struct segoff_s edd, struct drive_s *drive_gf)
+{
+    ASSERT16();
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    switch (GET_GLOBALFLAT(drive_gf->type)) {
+    case DTYPE_ATA:
+        return fill_ata_edd(edd, drive_gf);
+    default:
+        extern void _cfunc32flat_fill_edd_both(void);
+        return call32_params(_cfunc32flat_fill_edd_both
+                             , (u32)MAKE_FLATPTR(GET_SEG(SS), &edd)
+                             , (u32)drive_gf
+                             , 0, DISK_RET_EPARAM);
+    }
 }
 
 // Fill Extended Disk Drive (EDD) "Get drive parameters" info for a drive
-int noinline
+int
 fill_edd(struct segoff_s edd, struct drive_s *drive_gf)
 {
-    switch (GET_GLOBALFLAT(drive_gf->type)) {
-    case DTYPE_ATA:
-    case DTYPE_ATA_ATAPI:
-        return fill_ata_edd(edd, drive_gf);
-    case DTYPE_VIRTIO_BLK:
-    case DTYPE_VIRTIO_SCSI:
-        return fill_generic_edd(
-            edd, drive_gf, 0xffffffff, EDD_PCI | EDD_SCSI
-            , edd_pci_path(GET_GLOBALFLAT(drive_gf->cntl_id), 0), 0);
-    default:
-        return fill_generic_edd(edd, drive_gf, 0, 0, 0, 0);
-    }
+    int ret;
+    dprintf(1, "%s: type 0x%02x\n", __func__, GET_GLOBALFLAT(drive_gf->type));
+    if (MODESEGMENT)
+        ret = fill_edd_16(edd, drive_gf);
+    else
+        ret = fill_edd_32(&edd, drive_gf);
+    return ret;
 }
-
 
 /****************************************************************
  * Disk driver dispatch

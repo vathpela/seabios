@@ -39,5 +39,7 @@ struct virtio_blk_outhdr {
 struct disk_op_s;
 int virtio_blk_process_op(struct disk_op_s *op);
 void virtio_blk_setup(void);
+int virtio_blk_get_device_parameters(struct drive_s *drive_gf
+                                     , u32 *iobase, u16 *target, u32 *lun);
 
 #endif /* _VIRTIO_BLK_H */

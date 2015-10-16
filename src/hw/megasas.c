@@ -116,6 +116,21 @@ struct megasas_lun_s {
     u8 lun;
 };
 
+int
+megasas_get_device_parameters(struct drive_s *drive_gf
+                              , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (!CONFIG_MEGASAS)
+        return DISK_RET_EPARAM;
+
+    struct megasas_lun_s *mlun_gf =
+        container_of(drive_gf, struct megasas_lun_s, drive);
+    SET_LOWFLAT(*iobase, GET_GLOBALFLAT(mlun_gf->iobase));
+    SET_LOWFLAT(*target, GET_GLOBALFLAT(mlun_gf->target));
+    SET_LOWFLAT(*lun, GET_GLOBALFLAT(mlun_gf->lun));
+    return DISK_RET_SUCCESS;
+}
+
 static int megasas_fire_cmd(u16 pci_id, u32 ioaddr,
                             struct megasas_cmd_frame *frame)
 {

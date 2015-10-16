@@ -33,6 +33,22 @@ struct virtio_lun_s {
 };
 
 int
+virtio_scsi_get_device_parameters(struct drive_s *drive_gf
+                                  , u32 *iobase, u16 *target, u32 *lun)
+{
+    if (! CONFIG_VIRTIO_SCSI)
+        return DISK_RET_EPARAM;
+
+    struct virtio_lun_s *vlun =
+        container_of(drive_gf, struct virtio_lun_s, drive);
+    *iobase = 0xffffffff;
+    *target = vlun->target;
+    *lun = vlun->lun;
+
+    return DISK_RET_SUCCESS;
+}
+
+int
 virtio_scsi_process_op(struct disk_op_s *op)
 {
     if (! CONFIG_VIRTIO_SCSI)
