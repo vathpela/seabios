@@ -358,14 +358,7 @@ fill_edd_generic(struct segoff_s edd, struct drive_s *drive_gf
     // EDD 2.x
 
     dpt->size = 30;
-#if 1
     dpt->dpte.segoff = dpte_so.segoff;
-#elif 0
-    dpt->dpte.seg = FLATPTR_TO_SEG(dpte);
-    dpt->dpte.offset = FLATPTR_TO_OFFSET(dpte);
-#else
-    dpt->dpte = FLATPTR_TO_SEGOFF(&dpte);
-#endif
 
     if (size < (t13 ? 74 : 66) || !memcmp(dpt->host_bus, "\0\0\0\0", 4)) {
         dprintf(1, "%s:%d size is %d and host_bus is \"%c%c%c%c\"\n"
@@ -401,39 +394,27 @@ fill_edd_generic(struct segoff_s edd, struct drive_s *drive_gf
     if (!t13)
         dpt->iface_path &= 0x00ffffff;
 
-    dprintf(1, "%s:%d: sum[0x%08x:0x%08x] is 0x%x -> 0x%x\n"
-            , __func__, __LINE__
-            , (void *)dpt+30
-            , (void *)dpt+73
-            , sum, (u8)((~sum)+1));
-
-    dprintf(1, "%s:%d: offsetof(checksum): %d\n", __func__, __LINE__
-            , offsetof(struct int13dpt_s, device_path.t13.generic.checksum));
     if (t13) {
         void *start = (void *)&dpt->key;
         int size =
             offsetof(struct int13dpt_s, device_path.t13.generic.checksum)
             - offsetof(struct int13dpt_s, key);
+#if 1
         sum = checksum(start, size);
         dprintf(1, "%s:%d: sum[%p:%p(+%d)] is 0x%x -> 0x%x\n"
                 , __func__, __LINE__
-                , start, start+size, size, sum, (u8)((~sum)+1));
-	dpt->device_path.t13.generic.checksum = (~sum)+1;
-#if 0
-        sum = checksum_far(edd.seg, (void *)param_far+30, 43);
-        dprintf(1, "%s:%d: sum[%p:%p] is 0x%x -> 0x%x\n", __func__, __LINE__
-                , start, start+size, sum, (u8)((~sum)+1));
+                , start, start+size, size, sum, -sum);
+	dpt->device_path.t13.generic.checksum = -sum;
 #elif 0
+        sum = checksum_far(edd.seg, (void *)param_far+30, 43);
         SET_FARVAR(seg, param_far->device_path.t13.generic.checksum
-                   , (u8)((~sum)+1));
+                   , -sum;
 #endif
     } else {
         void *start = (void *)&dpt->key;
         int size = offsetof(struct int13dpt_s
                             , device_path.phoenix.checksum);
         sum = checksum(start, size);
-        dprintf(1, "%s:%d: sum[%p:%p] is 0x%02x\n", __func__, __LINE__
-                , start, start+size, (u8)sum);
         dpt->device_path.phoenix.checksum = (u8)((~sum)+1);
     }
 
