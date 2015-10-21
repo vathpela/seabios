@@ -137,14 +137,14 @@ struct pvscsi_lun_s {
 
 int
 pvscsi_get_device_parameters(struct drive_s *drive_gf
-                             , void **iobase, u16 *target, u32 *lun)
+                             , u32 *iobase, u16 *target, u32 *lun)
 {
     if (!CONFIG_PVSCSI)
         return DISK_RET_EPARAM;
 
     struct pvscsi_lun_s *plun =
         container_of(drive_gf, struct pvscsi_lun_s, drive);
-    *iobase = plun->iobase;
+    *iobase = (u32)plun->iobase;
     *target = plun->target;
     *lun = plun->lun;
 

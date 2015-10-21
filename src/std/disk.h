@@ -50,7 +50,12 @@ struct dpte_s {
     u8  checksum;
 } PACKED;
 
-struct int13dpt_t13dp_s {
+union device_path_u {
+    struct {
+        u64 device_path;
+        u8  reserved3;
+        u8  checksum;
+    } phoenix PACKED;
     union {
         struct {
             u8 device;
@@ -111,16 +116,7 @@ struct int13dpt_t13dp_s {
             u8  reserved2;
             u8  checksum;
         } generic PACKED;
-    } PACKED;
-} PACKED;
-
-union device_path_u {
-    struct {
-        u64 device_path;
-        u8  reserved3;
-        u8  checksum;
-    } phoenix PACKED;
-    struct int13dpt_t13dp_s t13;
+    } t13;
 } PACKED;
 
 // Disk Physical Table definition
